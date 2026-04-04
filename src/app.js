@@ -51,6 +51,7 @@ const { initSchema }     = require('./config/database');
 const authRouter         = require('./routes/auth');
 const kycRouter          = require('./routes/kyc');
 const walletRouter       = require('./routes/wallet');
+const webhookRouter      = require('./routes/webhooks');
 
 const app = express();
 
@@ -71,22 +72,63 @@ app.use(helmet({
 }));
 
 app.disable('x-powered-by');
+
+// Webhook route must be registered BEFORE express.json() so that
+// express.raw() in the webhook handler can capture the raw body
+// for Paystack HMAC-SHA512 signature verification.
+app.use('/api/v1/webhooks', webhookRouter);
+
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: false, limit: '10kb' }));
 app.set('trust proxy', 1);   // trust first proxy (for rate-limit IP detection)
 app.use(globalLimiter);
 
 // ── Request logging ───────────────────────────────────────────────────────────
+// Only log errors and slow requests — not every request.
+// Business events (register, login, fund, withdraw, KYC) are logged in their
+// respective route handlers. Logging every request at scale generates too much
+// noise and inflates observability costs.
 
-app.use((req, _res, next) => {
-  if (req.path !== '/health') {
-    logger.info({
-      message: 'Incoming request',
-      method:  req.method,
-      path:    req.path,
-      ip:      req.ip,
-    });
-  }
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const ms     = Date.now() - start;
+    const is4xx  = res.statusCode >= 400 && res.statusCode < 500;
+    const is5xx  = res.statusCode >= 500;
+    const isSlow = ms > 2000;
+
+    if (is5xx) {
+      logger.error({
+        message: 'Server error on request',
+        method:  req.method,
+        path:    req.path,
+        status:  res.statusCode,
+        userId:  req.user?.id || null,
+        ms,
+        ip:      req.ip,
+      });
+    } else if (is4xx) {
+      logger.warn({
+        message: `Bad request — ${res.statusCode}`,
+        method:  req.method,
+        path:    req.path,
+        status:  res.statusCode,
+        userId:  req.user?.id || null,
+        ms,
+        ip:      req.ip,
+      });
+    } else if (isSlow) {
+      logger.warn({
+        message: 'Slow request',
+        method:  req.method,
+        path:    req.path,
+        status:  res.statusCode,
+        userId:  req.user?.id || null,
+        ms,
+        ip:      req.ip,
+      });
+    }
+  });
   next();
 });
 
@@ -99,6 +141,7 @@ app.get('/health', (_req, res) => {
 app.use('/api/v1/auth',   authRouter);
 app.use('/api/v1/kyc',    kycRouter);
 app.use('/api/v1/wallet', walletRouter);
+// Note: /api/v1/webhooks is registered above express.json() for raw body access
 
 // 404 handler
 app.use((_req, res) => {

@@ -19,6 +19,7 @@ function errorHandler(err, req, res, next) {
     stack:   err.stack,
     path:    req.path,
     method:  req.method,
+    userId:  req.user?.id || null,
     ip:      req.ip,
   });
 

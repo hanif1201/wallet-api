@@ -141,7 +141,7 @@ async function creditWallet(client, walletId, amount, category, narration, metad
      JSON.stringify(metadata)]
   );
 
-  logger.info({ message: 'Wallet credited', walletId, amount, category, ref });
+  logger.info({ message: 'Wallet credited', userId: wallet.user_id, walletId, amount, category, ref });
 
   return {
     transaction: {
@@ -253,7 +253,7 @@ async function debitWallet(client, walletId, amount, category, narration, metada
      JSON.stringify(metadata)]
   );
 
-  logger.info({ message: 'Wallet debited', walletId, amount, category, ref });
+  logger.info({ message: 'Wallet debited', userId: wallet.user_id, walletId, amount, category, ref });
 
   return {
     transaction: {

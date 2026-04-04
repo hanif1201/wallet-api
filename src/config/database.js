@@ -9,6 +9,8 @@
  *   wallets             — one wallet per user; tracks balance and limits
  *   wallet_transactions — immutable ledger of every credit/debit event
  *   refresh_tokens      — JWT refresh tokens (hashed, revocable)
+ *   internal_accounts   — system ledger accounts (RECEIVABLE, PAYABLE)
+ *   provider_transactions — gateway payment records (Paystack)
  *
  * Security:
  *   - All PII columns store AES-256-GCM ciphertext
@@ -142,6 +144,52 @@ async function initSchema() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_rt_user_id ON refresh_tokens(user_id);
+
+    -- ── internal_accounts ──────────────────────────────────────────────────────
+    -- System ledger accounts for double-entry bookkeeping.
+    --   RECEIVABLE — tracks inflows from payment gateway (funding)
+    --   PAYABLE    — tracks outflows to banks via payment gateway (withdrawal)
+    CREATE TABLE IF NOT EXISTS internal_accounts (
+      id         TEXT          PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+      type       TEXT          UNIQUE NOT NULL,   -- RECEIVABLE | PAYABLE
+      balance    NUMERIC(15,2) NOT NULL DEFAULT 0.00,
+      currency   TEXT          NOT NULL DEFAULT 'NGN',
+      created_at TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    );
+
+    -- Seed the two internal accounts (idempotent)
+    INSERT INTO internal_accounts (type) VALUES ('RECEIVABLE'), ('PAYABLE')
+    ON CONFLICT (type) DO NOTHING;
+
+    -- ── provider_transactions ──────────────────────────────────────────────────
+    -- One row per gateway payment request (funding or withdrawal).
+    -- status lifecycle:
+    --   PENDING → SUCCESS | FAILED | REVERSED
+    CREATE TABLE IF NOT EXISTS provider_transactions (
+      id                 TEXT          PRIMARY KEY,
+      type               TEXT          NOT NULL,              -- FUNDING | WITHDRAWAL
+      user_id            TEXT          NOT NULL REFERENCES users(id),
+      wallet_id          TEXT          NOT NULL REFERENCES wallets(id),
+      amount             NUMERIC(15,2) NOT NULL,
+      currency           TEXT          NOT NULL DEFAULT 'NGN',
+      provider           TEXT          NOT NULL DEFAULT 'paystack',
+      provider_reference TEXT          UNIQUE,                -- Paystack reference/transfer_code
+      recipient_code     TEXT,                                -- Paystack recipient code (withdrawal)
+      bank_code          TEXT,
+      account_number     TEXT,
+      account_name       TEXT,
+      status             TEXT          NOT NULL DEFAULT 'PENDING',
+      wallet_tx_id       TEXT          REFERENCES wallet_transactions(id),
+      metadata           JSONB         NOT NULL DEFAULT '{}',
+      created_at         TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+      updated_at         TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+      completed_at       TIMESTAMPTZ
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_pt_provider_reference ON provider_transactions(provider_reference);
+    CREATE INDEX IF NOT EXISTS idx_pt_user_id            ON provider_transactions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_pt_status             ON provider_transactions(status);
   `);
 
   logger.info({ message: 'Database schema initialised' });
