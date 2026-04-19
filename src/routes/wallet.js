@@ -53,8 +53,40 @@ router.get('/fund/callback', async (req, res) => {
   const { reference, trxref } = req.query;
   const ref = reference || trxref;
 
+  const html = (icon, title, body, color) => `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>${title}</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+         display:flex;flex-direction:column;align-items:center;justify-content:center;
+         min-height:100vh;background:#f9fafb;padding:24px;text-align:center}
+    .card{background:#fff;border-radius:20px;padding:40px 28px;max-width:360px;
+          box-shadow:0 4px 24px rgba(0,0,0,.08)}
+    .icon{font-size:52px;margin-bottom:16px}
+    h1{font-size:22px;font-weight:700;color:#111827;margin-bottom:10px}
+    p{font-size:14px;color:#6b7280;line-height:1.6}
+    .badge{display:inline-block;margin-top:16px;padding:6px 14px;border-radius:99px;
+           font-size:12px;font-weight:600;background:${color}22;color:${color}}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">${icon}</div>
+    <h1>${title}</h1>
+    <p>${body}</p>
+    ${ref ? `<div class="badge">Ref: ${ref}</div>` : ''}
+    <p style="margin-top:20px;font-size:13px;color:#9ca3af">You can close this window and return to the app.</p>
+  </div>
+</body>
+</html>`;
+
   if (!ref) {
-    return res.status(400).json({ success: false, error: 'Missing payment reference.' });
+    return res.status(400).send(html('⚠️', 'Missing Reference', 'No payment reference was provided.', '#d97706'));
   }
 
   const { rows } = await pool.query(
@@ -64,18 +96,14 @@ router.get('/fund/callback', async (req, res) => {
 
   const pt = rows[0];
   if (!pt) {
-    return res.status(404).json({ success: false, error: 'Transaction not found.' });
+    return res.status(404).send(html('🔍', 'Not Found', 'This payment reference does not exist.', '#dc2626'));
   }
 
   if (pt.status === 'SUCCESS') {
-    return res.json({ success: true, message: 'Payment confirmed. Your wallet has been funded.' });
+    return res.send(html('✅', 'Payment Successful!', 'Your wallet has been funded. The balance will reflect in your app.', '#059669'));
   }
 
-  return res.json({
-    success:   false,
-    message:   'Payment not yet confirmed. You will be notified once Paystack processes it.',
-    reference: ref,
-  });
+  return res.send(html('⏳', 'Payment Processing', 'Your payment is being processed by Paystack. Your wallet will be funded automatically once confirmed.', '#7c3aed'));
 });
 
 router.use(jwtAuth);

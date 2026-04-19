@@ -63,6 +63,8 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_users_email_token ON users(email_token);
     CREATE INDEX IF NOT EXISTS idx_users_phone_token ON users(phone_token);
 
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
+
     -- ── kyc_documents ──────────────────────────────────────────────────────────
     -- One row per document type per user (unique constraint).
     -- Document numbers encrypted; HMAC token used for dedup checks.

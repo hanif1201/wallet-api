@@ -44,6 +44,7 @@ require('dotenv').config();
 const express = require('express');
 const helmet  = require('helmet');
 
+const cors               = require('cors');
 const { logger }         = require('./utils/logger');
 const { globalLimiter }  = require('./middleware/rateLimiter');
 const { errorHandler }   = require('./middleware/errorHandler');
@@ -52,6 +53,7 @@ const authRouter         = require('./routes/auth');
 const kycRouter          = require('./routes/kyc');
 const walletRouter       = require('./routes/wallet');
 const webhookRouter      = require('./routes/webhooks');
+const adminRouter        = require('./routes/admin');
 
 const app = express();
 
@@ -72,6 +74,11 @@ app.use(helmet({
 }));
 
 app.disable('x-powered-by');
+
+app.use(cors({
+  origin: ['http://localhost:5173', 'http://localhost:19006'],
+  credentials: true,
+}));
 
 // Webhook route must be registered BEFORE express.json() so that
 // express.raw() in the webhook handler can capture the raw body
@@ -141,6 +148,7 @@ app.get('/health', (_req, res) => {
 app.use('/api/v1/auth',   authRouter);
 app.use('/api/v1/kyc',    kycRouter);
 app.use('/api/v1/wallet', walletRouter);
+app.use('/api/v1/admin',  adminRouter);
 // Note: /api/v1/webhooks is registered above express.json() for raw body access
 
 // 404 handler

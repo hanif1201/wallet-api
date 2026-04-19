@@ -19,8 +19,7 @@ const Joi            = require('joi');
 
 const { pool }                              = require('../config/database');
 const { encrypt, hmacToken }               = require('../services/encryption');
-const { verifyDocument, computeNewLevel,
-        limitsForLevel, DOCUMENT_RULES }    = require('../services/kycService');
+const { verifyDocument, DOCUMENT_RULES }    = require('../services/kycService');
 const { jwtAuth }                          = require('../middleware/jwtAuth');
 const { logger }                           = require('../utils/logger');
 
@@ -66,100 +65,53 @@ router.post('/submit', async (req, res, next) => {
     });
   }
 
-  // Run verification (simulated)
+  // Validate document format (simulated) but do NOT auto-approve —
+  // admin must review and approve via the admin dashboard.
   const result = verifyDocument(documentType, documentNumber);
-  const status = result.valid ? 'VERIFIED' : 'REJECTED';
-
-  // Fetch current user
-  const { rows: userRows } = await pool.query(
-    'SELECT kyc_level FROM users WHERE id = $1',
-    [userId]
-  );
-  const currentLevel = userRows[0]?.kyc_level ?? 0;
-
-  const newLevel = result.valid
-    ? computeNewLevel(currentLevel, documentType)
-    : currentLevel;
+  if (!result.valid) {
+    return res.status(422).json({
+      success: false,
+      error:   `Document validation failed: ${result.reason}`,
+    });
+  }
 
   const docId = uuidv4();
-  const client = await pool.connect();
 
   try {
-    await client.query('BEGIN');
-
-    // Upsert kyc_documents (replace if same type resubmitted)
-    await client.query(
+    // Upsert kyc_documents with PENDING status
+    await pool.query(
       `INSERT INTO kyc_documents
          (id, user_id, document_type, document_token, encrypted_document_number,
           verification_status, verified_at, rejection_reason)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       VALUES ($1,$2,$3,$4,$5,'PENDING',NULL,NULL)
        ON CONFLICT (user_id, document_type)
        DO UPDATE SET
          document_token             = EXCLUDED.document_token,
          encrypted_document_number  = EXCLUDED.encrypted_document_number,
-         verification_status        = EXCLUDED.verification_status,
-         verified_at                = EXCLUDED.verified_at,
-         rejection_reason           = EXCLUDED.rejection_reason`,
-      [
-        docId,
-        userId,
-        documentType,
-        docToken,
-        encrypt(documentNumber),
-        status,
-        result.valid ? new Date() : null,
-        result.valid ? null : result.reason,
-      ]
+         verification_status        = 'PENDING',
+         verified_at                = NULL,
+         rejection_reason           = NULL`,
+      [docId, userId, documentType, docToken, encrypt(documentNumber)]
     );
 
-    if (result.valid && newLevel > currentLevel) {
-      const limits = limitsForLevel(newLevel);
-
-      // Upgrade user KYC level
-      await client.query(
-        `UPDATE users
-         SET kyc_level = $1, kyc_status = 'VERIFIED', updated_at = NOW()
-         WHERE id = $2`,
-        [newLevel, userId]
-      );
-
-      // Update wallet limits
-      await client.query(
-        `UPDATE wallets
-         SET daily_debit_limit   = $1,
-             monthly_debit_limit = $2,
-             updated_at          = NOW()
-         WHERE user_id = $3`,
-        [limits.dailyDebit, limits.monthlyDebit, userId]
-      );
-    }
-
-    await client.query('COMMIT');
+    // Mark user KYC status as PENDING (awaiting admin review)
+    await pool.query(
+      `UPDATE users SET kyc_status = 'PENDING', updated_at = NOW() WHERE id = $1`,
+      [userId]
+    );
   } catch (dbErr) {
-    await client.query('ROLLBACK');
     return next(dbErr);
-  } finally {
-    client.release();
   }
 
-  logger.info({
-    message:      'KYC document submitted',
-    userId,
-    documentType,
-    status,
-    newLevel,
-  });
+  logger.info({ message: 'KYC document submitted — awaiting admin review', userId, documentType });
 
   return res.json({
     success: true,
     verification: {
       documentType,
-      status,
-      kycLevel:  newLevel,
-      kycStatus: result.valid ? 'VERIFIED' : 'PENDING',
-      message:   result.valid
-        ? `${documentType} verified. KYC level upgraded to ${newLevel}.`
-        : `Verification failed: ${result.reason}`,
+      status:    'PENDING',
+      kycStatus: 'PENDING',
+      message:   'Document submitted successfully. Your KYC is under review and will be processed within 24 hours.',
     },
   });
 });
