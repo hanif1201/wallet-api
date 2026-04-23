@@ -192,6 +192,62 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_pt_provider_reference ON provider_transactions(provider_reference);
     CREATE INDEX IF NOT EXISTS idx_pt_user_id            ON provider_transactions(user_id);
     CREATE INDEX IF NOT EXISTS idx_pt_status             ON provider_transactions(status);
+
+    -- ── virtual_numbers ────────────────────────────────────────────────────────
+    -- Tracks phone numbers purchased by users via external SMS providers.
+    -- Supports multi-provider failover (SMS-Activate primary, 5SIM fallback).
+    -- status lifecycle: PENDING → RECEIVED | CANCELLED | EXPIRED
+    CREATE TABLE IF NOT EXISTS virtual_numbers (
+      id                  TEXT          PRIMARY KEY,
+      user_id             TEXT          NOT NULL REFERENCES users(id),
+      wallet_id           TEXT          NOT NULL REFERENCES wallets(id),
+      wallet_tx_id        TEXT          REFERENCES wallet_transactions(id),
+      refund_tx_id        TEXT          REFERENCES wallet_transactions(id),
+
+      phone_number        TEXT          NOT NULL,
+      country_code        TEXT          NOT NULL,   -- NG | US | DE | GB
+      country_name        TEXT          NOT NULL,
+      service_code        TEXT          NOT NULL,   -- telegram | whatsapp | etc.
+      service_name        TEXT          NOT NULL,
+
+      provider            TEXT          NOT NULL,   -- sms_activate | five_sim
+      provider_order_id   TEXT          NOT NULL,
+
+      status              TEXT          NOT NULL DEFAULT 'PENDING',
+
+      price_usd           NUMERIC(10,4) NOT NULL,
+      price_ngn           NUMERIC(15,2) NOT NULL,
+      exchange_rate       NUMERIC(10,2) NOT NULL,
+      markup_percent      NUMERIC(5,2)  NOT NULL DEFAULT 0,
+
+      sms_code            TEXT,
+      sms_text            TEXT,
+      sms_sender          TEXT,
+
+      expires_at          TIMESTAMPTZ   NOT NULL,
+      created_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+      updated_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+      completed_at        TIMESTAMPTZ
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_vn_user_id           ON virtual_numbers(user_id);
+    CREATE INDEX IF NOT EXISTS idx_vn_provider_order_id ON virtual_numbers(provider_order_id);
+    CREATE INDEX IF NOT EXISTS idx_vn_status            ON virtual_numbers(status);
+
+    -- ── platform_settings ──────────────────────────────────────────────────────
+    -- Admin-configurable key/value store for runtime settings.
+    CREATE TABLE IF NOT EXISTS platform_settings (
+      key         TEXT         PRIMARY KEY,
+      value       TEXT         NOT NULL,
+      description TEXT,
+      updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+      updated_by  TEXT         REFERENCES users(id)
+    );
+
+    INSERT INTO platform_settings (key, value, description) VALUES
+      ('usd_to_ngn_rate',        '1600', 'USD → NGN exchange rate used for virtual number pricing'),
+      ('number_markup_percent',  '10',   'Platform markup % added on top of provider cost (e.g. 10 = 10%)')
+    ON CONFLICT (key) DO NOTHING;
   `);
 
   logger.info({ message: 'Database schema initialised' });

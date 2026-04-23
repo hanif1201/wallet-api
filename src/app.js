@@ -54,6 +54,7 @@ const kycRouter          = require('./routes/kyc');
 const walletRouter       = require('./routes/wallet');
 const webhookRouter      = require('./routes/webhooks');
 const adminRouter        = require('./routes/admin');
+const numbersRouter      = require('./routes/numbers');
 
 const app = express();
 
@@ -75,8 +76,19 @@ app.use(helmet({
 
 app.disable('x-powered-by');
 
+const ALLOWED_ORIGINS = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:19006',
+  ...(process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',').map(o => o.trim()) : []),
+];
+
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:19006'],
+  origin: (origin, cb) => {
+    // Allow requests with no origin (mobile apps, curl, Postman)
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    cb(new Error(`CORS: origin ${origin} not allowed`));
+  },
   credentials: true,
 }));
 
@@ -145,10 +157,11 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-app.use('/api/v1/auth',   authRouter);
-app.use('/api/v1/kyc',    kycRouter);
-app.use('/api/v1/wallet', walletRouter);
-app.use('/api/v1/admin',  adminRouter);
+app.use('/api/v1/auth',    authRouter);
+app.use('/api/v1/kyc',     kycRouter);
+app.use('/api/v1/wallet',  walletRouter);
+app.use('/api/v1/admin',   adminRouter);
+app.use('/api/v1/numbers', numbersRouter);
 // Note: /api/v1/webhooks is registered above express.json() for raw body access
 
 // 404 handler
@@ -164,7 +177,13 @@ async function start() {
   try {
     await initSchema();
   } catch (err) {
-    logger.error({ message: 'Failed to initialise database schema', error: err.message });
+    logger.error({
+      message: 'Failed to initialise database schema',
+      error:   err.message || String(err),
+      code:    err.code,
+      detail:  err.detail,
+      errors:  err.errors?.map(e => e.message),
+    });
     process.exit(1);
   }
 

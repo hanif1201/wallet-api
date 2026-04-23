@@ -23,9 +23,11 @@ function errorHandler(err, req, res, next) {
     ip:      req.ip,
   });
 
+  // 503 (provider unavailable) is safe to surface — it carries user-facing context
+  const expose = status < 500 || status === 503;
   res.status(status).json({
     success: false,
-    error: status < 500 ? err.message : 'An internal server error occurred.',
+    error: expose ? err.message : 'An internal server error occurred.',
   });
 }
 

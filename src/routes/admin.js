@@ -420,6 +420,137 @@ router.get('/accounts', async (_req, res, next) => {
   }
 });
 
+// ── GET /settings ─────────────────────────────────────────────────────────────
+
+router.get('/settings', async (_req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT key, value, description, updated_at FROM platform_settings ORDER BY key`
+    );
+    return res.json({ success: true, settings: rows });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ── PUT /settings ─────────────────────────────────────────────────────────────
+
+router.put('/settings', async (req, res, next) => {
+  const { usd_to_ngn_rate, number_markup_percent } = req.body;
+
+  if (usd_to_ngn_rate !== undefined) {
+    const v = parseFloat(usd_to_ngn_rate);
+    if (isNaN(v) || v <= 0) {
+      return res.status(400).json({ success: false, error: 'usd_to_ngn_rate must be a positive number.' });
+    }
+  }
+  if (number_markup_percent !== undefined) {
+    const v = parseFloat(number_markup_percent);
+    if (isNaN(v) || v < 0 || v > 100) {
+      return res.status(400).json({ success: false, error: 'number_markup_percent must be between 0 and 100.' });
+    }
+  }
+
+  try {
+    const updates = [];
+    if (usd_to_ngn_rate !== undefined) {
+      updates.push(pool.query(
+        `UPDATE platform_settings SET value = $1, updated_at = NOW(), updated_by = $2 WHERE key = 'usd_to_ngn_rate'`,
+        [String(parseFloat(usd_to_ngn_rate)), req.user.id]
+      ));
+    }
+    if (number_markup_percent !== undefined) {
+      updates.push(pool.query(
+        `UPDATE platform_settings SET value = $1, updated_at = NOW(), updated_by = $2 WHERE key = 'number_markup_percent'`,
+        [String(parseFloat(number_markup_percent)), req.user.id]
+      ));
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ success: false, error: 'No valid settings provided.' });
+    }
+
+    await Promise.all(updates);
+    logger.info({ message: 'Platform settings updated', adminId: req.user.id, usd_to_ngn_rate, number_markup_percent });
+
+    const { rows } = await pool.query(`SELECT key, value, description, updated_at FROM platform_settings ORDER BY key`);
+    return res.json({ success: true, settings: rows });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ── GET /virtual-numbers ──────────────────────────────────────────────────────
+
+router.get('/virtual-numbers', async (req, res, next) => {
+  const page    = Math.max(1, parseInt(req.query.page,  10) || 1);
+  const limit   = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 20));
+  const offset  = (page - 1) * limit;
+  const status  = req.query.status;
+  const country = req.query.country;
+  const service = req.query.service;
+
+  try {
+    const conditions = [];
+    const params     = [];
+    let   pIdx       = 1;
+
+    if (status)  { conditions.push(`vn.status = $${pIdx++}`);       params.push(status.toUpperCase()); }
+    if (country) { conditions.push(`vn.country_code = $${pIdx++}`); params.push(country.toUpperCase()); }
+    if (service) { conditions.push(`vn.service_code = $${pIdx++}`); params.push(service.toLowerCase()); }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const [vnRes, countRes, revenueRes] = await Promise.all([
+      pool.query(
+        `SELECT vn.id, vn.phone_number, vn.country_code, vn.country_name,
+                vn.service_code, vn.service_name, vn.provider, vn.provider_order_id,
+                vn.status, vn.price_usd, vn.price_ngn, vn.sms_code,
+                vn.expires_at, vn.created_at, vn.completed_at,
+                u.encrypted_email, u.encrypted_first_name, u.encrypted_last_name
+         FROM virtual_numbers vn
+         JOIN users u ON u.id = vn.user_id
+         ${where}
+         ORDER BY vn.created_at DESC
+         LIMIT $${pIdx} OFFSET $${pIdx + 1}`,
+        [...params, limit, offset]
+      ),
+      pool.query(`SELECT COUNT(*) AS total FROM virtual_numbers vn ${where}`, params),
+      pool.query(`SELECT COALESCE(SUM(price_ngn), 0) AS total FROM virtual_numbers WHERE status != 'CANCELLED'`),
+    ]);
+
+    const total = parseInt(countRes.rows[0].total);
+
+    return res.json({
+      success:    true,
+      totalRevenue: parseFloat(revenueRes.rows[0].total),
+      pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      orders: vnRes.rows.map(v => ({
+        id:              v.id,
+        email:           decrypt(v.encrypted_email),
+        firstName:       decrypt(v.encrypted_first_name),
+        lastName:        decrypt(v.encrypted_last_name),
+        phoneNumber:     v.phone_number,
+        countryCode:     v.country_code,
+        countryName:     v.country_name,
+        serviceCode:     v.service_code,
+        serviceName:     v.service_name,
+        provider:        v.provider,
+        providerOrderId: v.provider_order_id,
+        status:          v.status,
+        priceUsd:        parseFloat(v.price_usd),
+        priceNgn:        parseFloat(v.price_ngn),
+        smsCode:         v.sms_code,
+        expiresAt:       v.expires_at,
+        createdAt:       v.created_at,
+        completedAt:     v.completed_at,
+      })),
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 // ── GET /provider-transactions ────────────────────────────────────────────────
 
 router.get('/provider-transactions', async (req, res, next) => {

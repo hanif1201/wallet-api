@@ -19,7 +19,7 @@ const Joi            = require('joi');
 
 const { pool }                              = require('../config/database');
 const { encrypt, hmacToken }               = require('../services/encryption');
-const { verifyDocument, DOCUMENT_RULES }    = require('../services/kycService');
+const { verifyDocument, DOCUMENT_RULES, limitsForLevel } = require('../services/kycService');
 const { jwtAuth }                          = require('../middleware/jwtAuth');
 const { logger }                           = require('../utils/logger');
 
